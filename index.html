@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lector de precios</title>
+<style>
+:root{--bg:#eef2f1;--card:#fff;--ink:#14231f;--mute:#5d6f6a;--line:#d3dcd9;--accent:#0f6b5c;--accent-ink:#fff;--warn:#b3261e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1815;--card:#172622;--ink:#e6f0ed;--mute:#93a8a2;--line:#2a3d38;--accent:#3fc2a8;--accent-ink:#06211b;--warn:#ff8a80}}
+:root[data-theme="dark"]{--bg:#0e1815;--card:#172622;--ink:#e6f0ed;--mute:#93a8a2;--line:#2a3d38;--accent:#3fc2a8;--accent-ink:#06211b;--warn:#ff8a80}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:1.3rem;margin:4px 0 12px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{flex:1;padding:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font:inherit;font-weight:600}
+.tabs button[aria-selected="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+#reader{width:100%;min-height:200px;border-radius:10px;overflow:hidden;background:#000}
+button.main{width:100%;padding:14px;border:0;border-radius:10px;background:var(--accent);color:var(--accent-ink);font:inherit;font-weight:700;margin-top:10px}
+button.alt{padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--ink);font:inherit}
+button.del{border-color:var(--warn);color:var(--warn)}
+input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;margin-top:6px}
+label{display:block;margin-top:10px;color:var(--mute);font-size:.9rem}
+.row{display:flex;gap:8px;align-items:center}
+.row input{margin-top:0}
+.price{font-size:2.2rem;font-weight:800;color:var(--accent);margin:4px 0}
+.code{font-family:ui-monospace,Menlo,monospace;color:var(--mute);font-size:.9rem}
+.item{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.item:last-child{border:0}
+.item b{display:block}
+.hint{color:var(--mute);font-size:.9rem}
+.msg{color:var(--warn);margin-top:8px}
+[hidden]{display:none!important}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<main>
+<h1>Lector de precios</h1>
+<div class="tabs" role="tablist">
+<button role="tab" id="t1" aria-selected="true">Escanear</button>
+<button role="tab" id="t2" aria-selected="false">Mis productos (<span id="n">0</span>)</button>
+</div>
+
+<section id="v1">
+<div class="card">
+<div id="reader"></div>
+<button class="main" id="go">Abrir cámara</button>
+<button class="main" id="photo" style="background:transparent;color:var(--accent);border:2px solid var(--accent)">Sacar foto del código</button>
+<input type="file" id="file" accept="image/*" capture="environment" hidden>
+<p class="msg" id="err" hidden></p>
+<div class="row" style="margin-top:12px">
+<input id="manual" inputmode="numeric" placeholder="O escribí el código a mano" aria-label="Código manual">
+<button class="alt" id="ok">Buscar</button>
+</div>
+</div>
+
+<div class="card" id="panel" hidden>
+<div class="code" id="pcode"></div>
+<div id="known" hidden><div class="hint">Precio registrado</div><div class="price" id="pprice"></div></div>
+<div class="hint" id="newtxt" hidden>Producto nuevo. Completá los datos para registrarlo.</div>
+<label for="pname">Nombre</label>
+<input id="pname" autocomplete="off">
+<label for="pp">Precio (ARS)</label>
+<input id="pp" inputmode="decimal" placeholder="0,00">
+<button class="main" id="save">Guardar</button>
+<button class="alt" id="again" style="width:100%;margin-top:8px">Escanear otro</button>
+</div>
+</section>
+
+<section id="v2" hidden>
+<div class="card">
+<input id="q" placeholder="Buscar por nombre o código" aria-label="Buscar">
+<div id="list"></div>
+<button class="main" id="dl">Descargar planilla (CSV)</button>
+<button class="alt" id="copy" style="width:100%;margin-top:8px">Copiar lista</button>
+<p class="hint" id="cmsg"></p>
+</div>
+</section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+var KEY="lector-precios-v1",data={},scanner=null,running=false,cur=null,mode="photo";
+var $=function(i){return document.getElementById(i)};
+try{data=JSON.parse(localStorage.getItem(KEY)||"{}")||{}}catch(e){data={}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(data))}catch(e){}}
+function money(v){return Number(v).toLocaleString("es-AR",{style:"currency",currency:"ARS"})}
+function num(s){s=String(s).trim().replace(/\./g,"").replace(",",".");var v=parseFloat(s);return isNaN(v)?null:v}
+
+function tab(i){
+ $("v1").hidden=i!==1;$("v2").hidden=i!==2;
+ $("t1").setAttribute("aria-selected",i===1);$("t2").setAttribute("aria-selected",i===2);
+ if(i===2){stop();render()}
+}
+$("t1").onclick=function(){tab(1)};$("t2").onclick=function(){tab(2)};
+
+function stop(){
+ if(scanner&&running){running=false;return scanner.stop().then(function(){$("go").textContent="Abrir cámara"}).catch(function(){})}
+ return Promise.resolve();
+}
+function getS(){
+ if(!scanner){
+  var F=Html5QrcodeSupportedFormats;
+  scanner=new Html5Qrcode("reader",{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39],verbose:false});
+ }
+ return scanner;
+}
+$("photo").onclick=function(){$("file").click()};
+$("file").onchange=function(){
+ var f=this.files[0];this.value="";if(!f)return;
+ stop().then(function(){return getS().scanFile(f,false)})
+ .then(function(code){mode="photo";$("err").hidden=true;show(code)})
+ .catch(function(){showErr("No se detectó ningún código en la foto. Acercate, con buena luz y el código recto y nítido.")});
+};
+function start(){
+ $("err").hidden=true;
+ if(typeof Html5Qrcode==="undefined"){showErr("No se pudo cargar el lector. Revisá la conexión.");return}
+ var cfg={fps:10,qrbox:function(w,h){var m=Math.min(w,h);return{width:Math.floor(Math.min(w*0.85,320)),height:Math.floor(Math.min(m*0.5,160))}}};
+ var onOk=function(code){mode="live";stop();show(code)};
+ var done=function(){running=true;$("go").textContent="Detener cámara"};
+ var fail=function(e){
+  var n=(e&&(e.name||e.message))||String(e||"");
+  var t="No se pudo abrir la cámara ("+n+"). ";
+  if(/NotAllowed|Permission|denied/i.test(n))t+="Permití la cámara en los permisos del sitio del navegador y recargá la página.";
+  else if(/NotFound|Devices/i.test(n))t+="No se encontró una cámara en este dispositivo.";
+  else if(/NotReadable|TrackStart|in use/i.test(n))t+="La cámara está siendo usada por otra app. Cerrala e intentá de nuevo.";
+  else t+="Probá con el botón de foto o escribí el código a mano.";
+  showErr(t);
+ };
+ getS().start({facingMode:"environment"},cfg,onOk,function(){}).then(done).catch(function(){
+  Html5Qrcode.getCameras().then(function(cams){
+   if(!cams||!cams.length)throw {name:"NotFoundError"};
+   var back=cams.filter(function(c){return /back|rear|trasera|environment/i.test(c.label)});
+   var id=(back.length?back[back.length-1]:cams[cams.length-1]).id;
+   return getS().start(id,cfg,onOk,function(){});
+  }).then(done).catch(fail);
+ });
+}
+function showErr(t){$("err").textContent=t;$("err").hidden=false}
+$("go").onclick=function(){running?stop():start()};
+
+function show(code){
+ cur=code;var p=data[code];
+ $("panel").hidden=false;$("pcode").textContent="Código "+code;
+ $("known").hidden=!p;$("newtxt").hidden=!!p;
+ if(p){$("pprice").textContent=money(p.price)}
+ $("pname").value=p?p.name:"";$("pp").value=p?String(p.price).replace(".",","):"";
+ $("save").textContent=p?"Actualizar":"Guardar";
+ $("again").textContent=mode==="live"?"Escanear otro":"Tomar otra foto";
+ $("panel").scrollIntoView({behavior:"smooth",block:"nearest"});
+ (p?$("pp"):$("pname")).blur();
+}
+$("ok").onclick=function(){var c=$("manual").value.trim();if(c){show(c);$("manual").value=""}};
+$("save").onclick=function(){
+ var n=$("pname").value.trim(),v=num($("pp").value);
+ if(!n||v===null){showErr("Completá el nombre y un precio válido.");return}
+ $("err").hidden=true;
+ data[cur]={name:n,price:v,at:Date.now()};persist();count();show(cur);
+};
+$("again").onclick=function(){mode==="live"?(function(){$("panel").hidden=true;start()})():$("file").click()};
+
+function count(){$("n").textContent=Object.keys(data).length}
+function render(){
+ var q=$("q").value.toLowerCase(),L=$("list");L.textContent="";
+ var keys=Object.keys(data).filter(function(k){return k.indexOf(q)>-1||data[k].name.toLowerCase().indexOf(q)>-1})
+  .sort(function(a,b){return data[a].name.localeCompare(data[b].name)});
+ if(!keys.length){var h=document.createElement("p");h.className="hint";h.textContent=Object.keys(data).length?"Sin resultados.":"Todavía no registraste productos. Escaneá el primero.";L.appendChild(h);return}
+ keys.forEach(function(k){
+  var d=document.createElement("div");d.className="item";
+  var l=document.createElement("div"),b=document.createElement("b"),c=document.createElement("span");
+  b.textContent=data[k].name;c.className="code";c.textContent=k;l.appendChild(b);l.appendChild(c);
+  var r=document.createElement("div");r.style.textAlign="right";
+  var p=document.createElement("b");p.textContent=money(data[k].price);
+  var e=document.createElement("button");e.className="alt";e.textContent="Editar";e.style.marginTop="6px";
+  e.onclick=function(){tab(1);show(k)};
+  var x=document.createElement("button");x.className="alt del";x.textContent="Borrar";x.style.margin="6px 0 0 6px";
+  x.onclick=function(){if(confirm("¿Borrar "+data[k].name+"?")){delete data[k];persist();count();render()}};
+  r.appendChild(p);r.appendChild(document.createElement("br"));r.appendChild(e);r.appendChild(x);
+  d.appendChild(l);d.appendChild(r);L.appendChild(d);
+ });
+}
+$("q").oninput=render;
+$("copy").onclick=function(){
+ var t=Object.keys(data).map(function(k){return k+"\t"+data[k].name+"\t"+data[k].price}).join("\n");
+ var done=function(m){$("cmsg").textContent=m};
+ try{navigator.clipboard.writeText(t).then(function(){done("Lista copiada. Pegala en una planilla.")},function(){done("No se pudo copiar.")})}catch(e){done("No se pudo copiar.")}
+};
+function csv(){
+ var q=function(s){return '"'+String(s).replace(/"/g,'""')+'"'};
+ var rows=["Codigo;Nombre;Precio"];
+ Object.keys(data).sort(function(a,b){return data[a].name.localeCompare(data[b].name)}).forEach(function(k){
+  rows.push(['="'+k+'"',q(data[k].name),String(data[k].price).replace(".",",")].join(";"));
+ });
+ return "\ufeff"+rows.join("\r\n");
+}
+$("dl").onclick=function(){
+ if(!Object.keys(data).length){$("cmsg").textContent="No hay productos para descargar.";return}
+ var d=new Date(),name="precios-"+d.toISOString().slice(0,10)+".csv",text=csv();
+ var fallback=function(){
+  try{
+   var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type:"text/csv;charset=utf-8"}));
+   a.download=name;document.body.appendChild(a);a.click();a.remove();$("cmsg").textContent="Descarga iniciada.";
+  }catch(e){$("cmsg").textContent="No se pudo descargar. Usá Copiar lista."}
+ };
+ if(window.claude&&claude.use){
+  claude.use("downloads").then(function(dl){
+   if(!dl){fallback();return}
+   dl.save({filename:name,data:text}).then(function(){$("cmsg").textContent="Planilla guardada."})
+   .catch(function(e){$("cmsg").textContent=(e&&e.code==="declined")?"Descarga cancelada.":"No se pudo descargar. Usá Copiar lista."});
+  }).catch(fallback);
+ }else{fallback()}
+};
+count();
+</script>
+</body>
+</html>

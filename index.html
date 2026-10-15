@@ -76,6 +76,8 @@ label{display:block;margin-top:10px;color:var(--mute);font-size:.9rem}
 <input id="q" placeholder="Buscar por nombre o código" aria-label="Buscar">
 <div id="list"></div>
 <button class="main" id="dl">Descargar planilla (CSV)</button>
+<button class="main" id="imp" style="background:transparent;color:var(--accent);border:2px solid var(--accent)">Importar planilla (CSV)</button>
+<input type="file" id="impf" accept=".csv,text/csv,text/plain" hidden>
 <button class="alt" id="copy" style="width:100%;margin-top:8px">Copiar lista</button>
 <p class="hint" id="cmsg"></p>
 </div>
@@ -213,6 +215,36 @@ $("dl").onclick=function(){
    .catch(function(e){$("cmsg").textContent=(e&&e.code==="declined")?"Descarga cancelada.":"No se pudo descargar. Usá Copiar lista."});
   }).catch(fallback);
  }else{fallback()}
+};
+function splitLine(l,sep){var o=[],c="",q=false;for(var i=0;i<l.length;i++){var ch=l[i];if(q){if(ch==='"'){if(l[i+1]==='"'){c+='"';i++}else q=false}else c+=ch}else if(ch==='"')q=true;else if(ch===sep){o.push(c);c=""}else c+=ch}o.push(c);return o}
+function parsePrice(t){
+ t=String(t).replace(/[$\s]/g,"");if(!t)return null;
+ if(t.indexOf(",")>-1)t=t.replace(/\./g,"").replace(",",".");
+ else if(/^\d{1,3}(\.\d{3})+$/.test(t))t=t.replace(/\./g,"");
+ var v=parseFloat(t);return isNaN(v)?null:v;
+}
+function importCSV(text){
+ var lines=text.replace(/^\ufeff/,"").split(/\r?\n/).filter(function(l){return l.trim()});
+ if(!lines.length)return"El archivo está vacío.";
+ var sep=lines[0].indexOf(";")>-1?";":",",add=0,upd=0,bad=0;
+ lines.forEach(function(l,i){
+  var f=splitLine(l,sep),code=(f[0]||"").replace(/^=/,"").replace(/"/g,"").trim();
+  if(i===0&&/^cod/i.test(code))return;
+  var name=(f[1]||"").trim(),price=parsePrice(f[2]||"");
+  if(!code||!name||price===null){bad++;return}
+  if(data[code])upd++;else add++;
+  data[code]={name:name,price:price,at:Date.now()};
+ });
+ persist();count();render();
+ return"Importados: "+add+" nuevos, "+upd+" actualizados"+(bad?", "+bad+" filas omitidas por datos incompletos":"")+".";
+}
+$("imp").onclick=function(){$("impf").click()};
+$("impf").onchange=function(){
+ var f=this.files[0];this.value="";if(!f)return;
+ var r=new FileReader();
+ r.onload=function(){try{$("cmsg").textContent=importCSV(String(r.result))}catch(e){$("cmsg").textContent="No se pudo leer el archivo."}};
+ r.onerror=function(){$("cmsg").textContent="No se pudo leer el archivo."};
+ r.readAsText(f,"utf-8");
 };
 count();
 </script>
